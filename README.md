@@ -67,6 +67,6 @@ dotnet run
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgements
-Google Cloud Video Intelligence API for providing the core video analysis capabilities.
-RecordRTC for handling video recording in the browser.
+- Google Cloud Video Intelligence API for providing the core video analysis capabilities.
+- RecordRTC for handling video recording in the browser.
 
