@@ -1,0 +1,79 @@
+﻿@{
+    ViewData["Title"] = "Liveness Check";
+}
+
+<h2>Liveness Check</h2>
+
+<div>
+    <video id="video" width="640" height="480" autoplay></video>
+    <button id="startButton">Start Recording</button>
+    <button id="stopButton" disabled>Stop Recording</button>
+</div>
+
+<div id="result"></div>
+
+@section Scripts {
+    <script src="https://cdn.jsdelivr.net/npm/recordrtc/RecordRTC.min.js"></script>
+    <script>
+        let video = document.getElementById('video');
+        let startButton = document.getElementById('startButton');
+        let stopButton = document.getElementById('stopButton');
+        let result = document.getElementById('result');
+        let recorder;
+
+        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+            .then(function (stream) {
+                video.srcObject = stream;
+            })
+            .catch(function (err) {
+                console.log("An error occurred: " + err);
+            });
+
+        startButton.onclick = function () {
+            // Clear previous result message
+            result.innerText = '';
+
+            this.disabled = true;
+            stopButton.disabled = false;
+
+            recorder = RecordRTC(video.srcObject, {
+                type: 'video'
+            });
+
+            recorder.startRecording();
+
+            setTimeout(function () {
+                stopButton.click();
+            }, 5000);  // Stop recording after 5 seconds
+        };
+
+        stopButton.onclick = function () {
+            this.disabled = true;
+
+            recorder.stopRecording(function () {
+                let blob = recorder.getBlob();
+                let formData = new FormData();
+                formData.append('videoFile', blob, 'liveness_check.webm');
+
+                // Show processing message and disable the start button
+                result.innerText = 'Processing...';
+                startButton.disabled = true;
+
+                fetch('/Liveness/CheckLiveness', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        result.innerText = data.message;
+                        startButton.disabled = false;  // Re-enable the start button after processing
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        result.innerText = 'An error occurred during the liveness check.';
+                        startButton.disabled = false;  // Re-enable the start button in case of error
+                    });
+            });
+        };
+    </script>
+}
