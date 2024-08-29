@@ -4,13 +4,32 @@
 
 <h2>Liveness Check</h2>
 
-<div>
-    <video id="video" width="640" height="480" autoplay></video>
-    <button id="startButton">Start Recording</button>
-    <button id="stopButton" disabled>Stop Recording</button>
+<div class="position-relative">
+    <video id="video" class="border border-dark" width="640" height="480" style="border-radius:.5rem;" autoplay></video>
+
+    <!-- Processing and Result Messages -->
+    <div id="alertMessage" class="d-none position-absolute top-50 start-50 translate-middle text-center w-100">
+        <div id="progressContainer" class="d-none">
+            <span id="processingText" class="fw-bold d-block" style="margin-right: 55%;">Processing...</span>
+            <div class="progress" style="height: 30px; margin-right:55%;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                     role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                    0%
+                </div>
+            </div>
+        </div>
+        <span id="resultText" class="d-none fw-bold d-block" style="margin-right: 45%;"></span>
+    </div>
+
+    <!-- Control Buttons -->
+    <button id="startButton" class="btn btn-primary mt-2">Start Recording</button>
+    <button id="stopButton" class="btn btn-danger mt-2" disabled>Stop Recording</button>
+    <button id="toggleWebcamButton" class="btn btn-secondary position-absolute" style="top: 0px; right: 321px;">
+        Toggle Webcam
+    </button>
 </div>
 
-<div id="result"></div>
+<div id="result" class="mt-3"></div>
 
 @section Scripts {
     <script src="https://cdn.jsdelivr.net/npm/recordrtc/RecordRTC.min.js"></script>
@@ -18,24 +37,70 @@
         let video = document.getElementById('video');
         let startButton = document.getElementById('startButton');
         let stopButton = document.getElementById('stopButton');
-        let result = document.getElementById('result');
+        let toggleWebcamButton = document.getElementById('toggleWebcamButton');
+        let alertMessage = document.getElementById('alertMessage');
+        let progressBar = document.getElementById('progressBar');
+        let resultText = document.getElementById('resultText');
+        let progressContainer = document.getElementById('progressContainer');
+        let stream;
         let recorder;
+        let webcamOn = true;
 
-        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-            .then(function (stream) {
-                video.srcObject = stream;
-            })
-            .catch(function (err) {
-                console.log("An error occurred: " + err);
+        function startWebcam() {
+            return new Promise((resolve, reject) => {
+                navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                    .then(function (mediaStream) {
+                        stream = mediaStream;
+                        video.srcObject = stream;
+                        webcamOn = true;
+                        toggleWebcamButton.innerText = "Turn Off Webcam";
+                        resolve();
+                    })
+                    .catch(function (err) {
+                        console.log("An error occurred: " + err);
+                        reject(err);
+                    });
             });
+        }
+
+        function stopWebcam() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+                webcamOn = false;
+                toggleWebcamButton.innerText = "Turn On Webcam";
+            }
+        }
+
+        toggleWebcamButton.onclick = function () {
+            clearResultText();
+            if (webcamOn) {
+                stopWebcam();
+            } else {
+                startWebcam();
+            }
+        };
+
+        startWebcam();
 
         startButton.onclick = function () {
-            // Clear previous result message
-            result.innerText = '';
-
+            clearResultText();
             this.disabled = true;
             stopButton.disabled = false;
 
+            if (!webcamOn) {
+                startWebcam().then(() => {
+                    startRecording();
+                }).catch(() => {
+                    startButton.disabled = false;
+                    stopButton.disabled = true;
+                });
+            } else {
+                startRecording();
+            }
+        };
+
+        function startRecording() {
             recorder = RecordRTC(video.srcObject, {
                 type: 'video'
             });
@@ -44,20 +109,46 @@
 
             setTimeout(function () {
                 stopButton.click();
-            }, 5000);  // Stop recording after 5 seconds
-        };
+            }, 5000);
+        }
+
+        function captureScreenshot() {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            return new Promise((resolve) => {
+                canvas.toBlob(resolve, 'image/png');
+            });
+        }
 
         stopButton.onclick = function () {
             this.disabled = true;
+            alertMessage.classList.remove('d-none');
+            progressContainer.classList.remove('d-none');
+            progressBar.style.width = '0%';
+            progressBar.innerText = '0%';
+            resultText.classList.add('d-none');
 
-            recorder.stopRecording(function () {
+            recorder.stopRecording(async function () {
                 let blob = recorder.getBlob();
                 let formData = new FormData();
                 formData.append('videoFile', blob, 'liveness_check.webm');
 
-                // Show processing message and disable the start button
-                result.innerText = 'Processing...';
-                startButton.disabled = true;
+                // Capture and append screenshot
+                const screenshot = await captureScreenshot();
+                formData.append('screenshotFile', screenshot, 'screenshot.png');
+
+                let progressInterval = setInterval(function () {
+                    let width = parseInt(progressBar.style.width);
+                    if (width >= 100) {
+                        clearInterval(progressInterval);
+                    } else {
+                        width += 2;
+                        progressBar.style.width = width + '%';
+                        progressBar.innerText = width + '%';
+                    }
+                }, 530);
 
                 fetch('/Liveness/CheckLiveness', {
                     method: 'POST',
@@ -65,15 +156,60 @@
                 })
                     .then(response => response.json())
                     .then(data => {
-                        result.innerText = data.message;
-                        startButton.disabled = false;  // Re-enable the start button after processing
+                        clearInterval(progressInterval);
+                        progressBar.style.width = '100%';
+                        progressBar.innerText = '100%';
+
+                        setTimeout(function () {
+                            progressContainer.classList.add('d-none');
+                            resultText.classList.remove('d-none');
+                            resultText.innerText = data.message;
+                            if (data.message === "Liveness check passed.") {
+                                resultText.classList.add('text-success');
+                                resultText.classList.remove('text-danger');
+                            } else {
+                                resultText.classList.add('text-danger');
+                                resultText.classList.remove('text-success');
+                            }
+                            startButton.disabled = false;
+                        }, 1000);
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        result.innerText = 'An error occurred during the liveness check.';
-                        startButton.disabled = false;  // Re-enable the start button in case of error
+                        clearInterval(progressInterval);
+                        progressBar.style.width = '100%';
+                        progressBar.innerText = 'Error';
+
+                        setTimeout(function () {
+                            progressContainer.classList.add('d-none');
+                            resultText.classList.remove('d-none');
+                            resultText.innerText = 'An error occurred during the liveness check.';
+                            resultText.classList.add('text-danger');
+                            resultText.classList.remove('text-success');
+                            startButton.disabled = false;
+                        }, 1000);
                     });
+
+                stopWebcam();
             });
         };
+
+        function clearResultText() {
+            alertMessage.classList.add('d-none');
+            resultText.innerText = '';
+            resultText.classList.add('d-none');
+            progressBar.classList.remove('d-none');
+            progressContainer.classList.add('d-none');
+            startButton.disabled = false;
+        }
     </script>
 }
+
+<style>
+    #progressContainer {
+        margin-top: 15%;
+        width: 80%;
+        margin-left: auto;
+        margin-right: auto;
+    }
+</style>

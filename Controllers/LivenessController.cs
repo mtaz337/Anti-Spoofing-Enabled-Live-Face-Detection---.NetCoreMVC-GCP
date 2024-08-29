@@ -1,23 +1,28 @@
-﻿using System;
+﻿using Microsoft.AspNetCore.Mvc;
+using Google.Cloud.VideoIntelligence.V1;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using Google.Cloud.VideoIntelligence.V1;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 
-namespace YourNamespace.Controllers
+namespace LiveFaceDetectionAPP.Controllers
 {
     public class LivenessController : Controller
     {
         private readonly VideoIntelligenceServiceClient _videoIntelligenceService;
         private readonly ILogger<LivenessController> _logger;
+        private readonly HashSet<string> _allowedWearables;
 
         public LivenessController(ILogger<LivenessController> logger)
         {
             _videoIntelligenceService = VideoIntelligenceServiceClient.Create();
             _logger = logger;
+            _allowedWearables = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "headphones", "hat", "cap", "glasses", "sunglasses", "earrings", "necklace", "bracelet", "watch"
+                // Add more allowed wearables as needed
+            };
         }
 
         [HttpGet]
@@ -27,7 +32,7 @@ namespace YourNamespace.Controllers
         }
 
         [HttpPost]
-        public async Task<IActionResult> CheckLiveness(IFormFile videoFile)
+        public async Task<IActionResult> CheckLiveness(IFormFile videoFile, IFormFile screenshotFile)
         {
             if (videoFile == null || videoFile.Length == 0)
             {
@@ -52,14 +57,12 @@ namespace YourNamespace.Controllers
 
                     var result = response.Result;
 
-                    if (IsLivenessValid(result))
-                    {
-                        return Json(new { success = true, message = "Liveness check passed." });
-                    }
-                    else
-                    {
-                        return Json(new { success = false, message = "Malicious attempt detected. Liveness check failed." });
-                    }
+                    var (isValid, message) = IsLivenessValid(result);
+
+                    // Save the screenshot
+                    await SaveScreenshot(screenshotFile, isValid);
+
+                    return Json(new { success = isValid, message = message });
                 }
             }
             catch (Exception ex)
@@ -69,17 +72,42 @@ namespace YourNamespace.Controllers
             }
         }
 
-        private bool IsLivenessValid(AnnotateVideoResponse result)
+        private async Task SaveScreenshot(IFormFile screenshotFile, bool isValid)
+        {
+            if (screenshotFile != null)
+            {
+                var folderName = isValid ? "Successful_Detections" : "Unsuccessful_Detections";
+                var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", folderName);
+                Directory.CreateDirectory(folderPath);  // Ensure the directory exists
+
+                var fileName = $"screenshot_{DateTime.Now:yyyyMMddHHmmss}.png";
+                var filePath = Path.Combine(folderPath, fileName);
+
+                using (var fileStream = new FileStream(filePath, FileMode.Create))
+                {
+                    await screenshotFile.CopyToAsync(fileStream);
+                }
+            }
+        }
+
+        private (bool isValid, string message) IsLivenessValid(AnnotateVideoResponse result)
         {
             try
             {
+                _logger.LogInformation($"AnnotationResults count: {result.AnnotationResults.Count}");
+                if (result.AnnotationResults.Count > 0)
+                {
+                    _logger.LogInformation($"FaceDetectionAnnotations count: {result.AnnotationResults[0].FaceDetectionAnnotations.Count}");
+                    _logger.LogInformation($"ObjectAnnotations count: {result.AnnotationResults[0].ObjectAnnotations.Count}");
+                }
+
                 var faceDetections = result.AnnotationResults[0].FaceDetectionAnnotations;
                 var objectTrackings = result.AnnotationResults[0].ObjectAnnotations;
 
                 if (faceDetections.Count == 0)
                 {
                     _logger.LogWarning("No faces detected in the video.");
-                    return false; // No face detected
+                    return (false, "No face detected. Liveness check failed.");
                 }
 
                 bool consistentFacePresence = true;
@@ -132,21 +160,33 @@ namespace YourNamespace.Controllers
                     }
                 }
 
-                bool suspiciousObjectDetected = objectTrackings.Any(obj =>
-                    obj.Entity.Description.ToLower().Contains("phone") ||
-                    obj.Entity.Description.ToLower().Contains("screen"));
+                var suspiciousObjects = objectTrackings
+                    .Where(obj => !_allowedWearables.Contains(obj.Entity.Description))
+                    .Where(obj =>
+                        obj.Entity.Description.ToLower().Contains("phone") ||
+                        obj.Entity.Description.ToLower().Contains("screen") ||
+                        obj.Entity.Description.ToLower().Contains("tablet") ||
+                        obj.Entity.Description.ToLower().Contains("laptop") ||
+                        obj.Entity.Description.ToLower().Contains("paper"))
+                    .ToList();
 
-                if (suspiciousObjectDetected)
+                if (suspiciousObjects.Any())
                 {
-                    _logger.LogInformation("Suspicious object (phone or screen) detected.");
+                    _logger.LogInformation($"Suspicious objects detected: {string.Join(", ", suspiciousObjects.Select(o => o.Entity.Description))}");
+                    return (false, "Malicious attempt detected. Liveness check failed.");
                 }
 
-                return consistentFacePresence && naturalMovements && !suspiciousObjectDetected;
+                if (!consistentFacePresence || !naturalMovements)
+                {
+                    return (false, "Inconsistent face presence or unnatural movements detected. Liveness check failed.");
+                }
+
+                return (true, "Liveness check passed.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An error occurred while validating liveness.");
-                return false;
+                return (false, "An error occurred during liveness validation.");
             }
         }
     }
