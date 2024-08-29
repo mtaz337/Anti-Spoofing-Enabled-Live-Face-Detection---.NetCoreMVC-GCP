@@ -6,6 +6,10 @@ This project implements a liveness detection system using .NET Core MVC and Goog
 - **Live Face Detection:** Capture live video from the user's webcam to detect and validate face presence.
 - **Anti-Spoofing:** Identify suspicious objects like phones or screens to prevent spoofing attempts.
 - **Real-time Feedback:** Display real-time processing status and final results to the user.
+- **Image Saving Based on Detection Results:** Automatically save captured images in designated folders depending on the outcome:
+  - **Successful_Detections:** Stores images if the liveness check is successful.
+  - **Unsuccessful_Detections:** Stores images if the liveness check fails.
+- **Enhanced Liveness Detection:** Utilizes advanced techniques and services to accurately determine if the user is live.
 
 ## Technology Stack
 - .NET Core MVC for the backend framework.
